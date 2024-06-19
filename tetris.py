@@ -25,6 +25,8 @@ class Board():
         self.features = np.zeros(7)
         self.score = 0
         self.setPieces()
+        self.nextPiece = self.pieces[random.randint(0, len(self.pieces) - 1)]
+        self.nextNextPiece = self.pieces[random.randint(0, len(self.pieces) - 1)]
 
     def printState(self):
         for i in self.state[::-1]:
@@ -58,6 +60,10 @@ class Board():
 
         # check for cleared lines
         self.clearLines()
+
+        # update next piece
+        self.nextPiece = self.nextNextPiece
+        self.nextNextPiece = self.pieces[random.randint(0, len(self.pieces) - 1)]
 
         return True
 
@@ -117,10 +123,6 @@ class Board():
 
         # self.pieces -> piece -> orientation of piece
         self.pieces = [iPieces, jPieces, lPieces, oPieces, sPieces, tPieces, zPieces]
-
-    def setWeights(self, weights):
-        # assign weights passed in
-        self.weights = weights
 
     def calcFeatures(self):
         # calculates the features:
@@ -188,12 +190,63 @@ class Board():
             self.__dict__ = copy.deepcopy(bestState.__dict__)
         return alive
 
+    def nextStateLookAhead(self):
+        # finds the best next state by looking at next 2 states and updates itself to next state
+        # returns False if no more possible moves
+
+        bestScore, bestState = self.nextStateHelper(1)
+
+        # if we we are still alive
+        if bestState is not None:
+            self.__dict__ = copy.deepcopy(bestState.__dict__)
+            return True
+        else:
+            return False
+
+
+    def nextStateHelper(self, depth):
+        # recursive helper function for next state
+        # returns the next best score and best state (-inf if no possible moves)
+        bestScore = -np.inf
+        bestState = None
+        # bestChild = None
+
+        for orientation in self.nextPiece:
+            for offset in range(self.width - orientation.width + 1):
+                # for each orientation and position, drop piece
+                nextBoard = copy.deepcopy(self)
+                # if the drop is not succesful, continue to next
+                if not nextBoard.drop(orientation, offset):
+                    continue
+
+                # if leaf node
+                if depth == 2:
+                    nextBoard.calcFeatures()
+                    nextBoard.calcScore()
+                    if nextBoard.score > bestScore:
+                        bestScore = nextBoard.score
+                        bestState = nextBoard
+
+                # elif parent, recursievley call on child
+                elif depth == 1:
+                    childScore, childState = nextBoard.nextStateHelper(2)
+                    # if the child is best, than keep track of the nextBoard
+                    if childScore > bestScore:
+                        bestState = copy.copy(nextBoard)
+                        bestScore = childScore
+                        # bestChild = childState
+
+        # if depth == 1:
+        #     bestState.printState()
+        #     bestChild.printState()
+
+        return bestScore, bestState
+
 class GeneticAlgorithm():
     def __init__(self, children=16, mutationRate=0.2):
         self.mutationRate = mutationRate
-        self.childrenWeights = []
-        for i in range(children):
-            self.childrenWeights.append(np.random.uniform(-1, 1, 7))
+        self.childrenWeights = np.random.uniform(-1, 1, (children, 7))
+        self.children = int(children)
         self.generations = 0
         self.scores = []
         self.bestScore = 0
@@ -201,14 +254,18 @@ class GeneticAlgorithm():
     def mutate(self):
         # generate new weights by mutation
 
-        # mutate each into n/2 children
+        # mutate each into n/4 children
         newChildrenWeights = []
         for currWeights in self.parents:
             newChildrenWeights.append(currWeights)
-            for i in range(int(len(self.childrenWeights) / 2) - 1):
+            for i in range(int(len(self.childrenWeights) / 4) - 1):
                 newWeights = currWeights + np.random.normal(0, self.mutationRate, 7)
                 newWeights = np.clip(newWeights, -1, 1)
                 newChildrenWeights.append(newWeights)
+
+        # remainig will be random new weights
+        randomWeights = np.random.uniform(-1, 1, (self.children - len(newChildrenWeights), 7))
+        newChildrenWeights = np.concatenate((newChildrenWeights, randomWeights))
 
         self.childrenWeights = newChildrenWeights
 
@@ -231,23 +288,24 @@ class GeneticAlgorithm():
     def playHelper(self, weights):
         # returns [fitness,]
         board = Board()
-        board.setWeights(weights)
+        board.weights = weights
 
-        while board.nextState():
+        while board.nextStateLookAhead():
+        # while board.nextState():
             pass
 
         return np.concatenate((([board.fitness]), (board.weights)))
 
 if __name__ == '__main__':
-    ga = GeneticAlgorithm(children=128)
+    ga = GeneticAlgorithm(children=64)
 
-    epochs = 500
+    epochs = 10
 
     start = timeit.default_timer()
 
     for i in range(epochs):
-        if i % 10 == 0:
-            print("epoch: ", i)
+        # if i % 10 == 0:
+        print("epoch: ", i)
         ga.play()
         ga.mutate()
 
@@ -257,5 +315,5 @@ if __name__ == '__main__':
     print("most recent weights: ", ga.parents[0])
 
 
-    # plt.plot(ga.scores)
-    # plt.show()
+    plt.plot(ga.scores)
+    plt.show()
