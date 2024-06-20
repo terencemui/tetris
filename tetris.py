@@ -15,15 +15,18 @@ class Board():
     def __init__(self):
         self.width = 10
         self.height = 20
+
         self.state = np.zeros((self.height, self.width), dtype=int)
         self.tops = np.zeros(self.width, dtype=int)
         self.maxHeight = max(self.tops)
         self.linesCleared = 0
         self.totalLinesCleared = 0
         self.fitness = 0
-        self.weights = np.zeros(7)
+
+        self.weights = None
         self.features = np.zeros(7)
         self.score = 0
+
         self.setPieces()
         self.nextPiece = self.pieces[random.randint(0, len(self.pieces) - 1)]
         self.nextNextPiece = self.pieces[random.randint(0, len(self.pieces) - 1)]
@@ -88,7 +91,7 @@ class Board():
         self.totalLinesCleared += count
         self.linesCleared = count
 
-        scores = {0: 0, 1: 100, 2: 300, 3: 500, 4: 800}
+        scores = {0: 0, 1: 100, 2: 300, 3: 500, 4: 2400}
 
         self.fitness += scores[count]
 
@@ -156,11 +159,25 @@ class Board():
         # if tetris
         tetris = 1 if linesCleared == 4 else 0
 
-        self.features =  [holes, holeDepths, col0, bumps, maxHeight, linesCleared, tetris]
+        self.features =  np.transpose([[holes, holeDepths, col0, bumps, maxHeight, linesCleared, tetris]])
 
     def calcScore(self):
         # calculates the score based off the weights and features
         self.score = np.dot(self.weights, self.features)
+
+    def ReLU(self, Z):
+        return np.clip(Z, 0, None)
+
+    def calcScoreNN(self):
+
+        W1, b1, W2, b2 = self.weights
+
+        Z1 = W1 @ self.features + b1
+        Y1 = self.ReLU(Z1)
+        Z2 = W2 @ Y1 + b2
+        Y2 = self.ReLU(Z2)
+
+        self.score =  Y2
 
     def nextState(self):
         # finds the best next state and updates itself to it
@@ -181,7 +198,8 @@ class Board():
                     continue
                 alive = True
                 nextBoard.calcFeatures()
-                nextBoard.calcScore()
+                nextBoard.calcScoreNN()
+                # nextBoard.calcScore()
                 if nextBoard.score > bestScore:
                     bestScore = nextBoard.score
                     bestState = nextBoard
@@ -222,7 +240,8 @@ class Board():
                 # if leaf node
                 if depth == 2:
                     nextBoard.calcFeatures()
-                    nextBoard.calcScore()
+                    nextBoard.calcScoreNN()
+                    # nextBoard.calcScore()
                     if nextBoard.score > bestScore:
                         bestScore = nextBoard.score
                         bestState = nextBoard
@@ -243,9 +262,20 @@ class Board():
         return bestScore, bestState
 
 class GeneticAlgorithm():
-    def __init__(self, children=16, mutationRate=0.2):
+    def __init__(self, children=16, mutationRate=0.2, layerDims=[7, 5, 1]):
         self.mutationRate = mutationRate
-        self.childrenWeights = np.random.uniform(-1, 1, (children, 7))
+        # self.childrenWeights = np.random.uniform(-1, 1, (children, 7))
+
+        # randomly generate weights for each child
+        self.childrenWeights = []
+        for child in range(children):
+            childWeights = []
+            childWeights.append(np.random.normal(0, 0.01, [layerDims[1], layerDims[0]]))
+            childWeights.append(np.zeros((layerDims[1], 1)))
+            childWeights.append(np.random.normal(0, 0.01, [layerDims[2], layerDims[1]]))
+            childWeights.append(np.zeros((layerDims[2], 1)))
+            self.childrenWeights.append(childWeights)
+
         self.children = int(children)
         self.generations = 0
         self.scores = []
@@ -254,9 +284,9 @@ class GeneticAlgorithm():
     def mutate(self):
         # generate new weights by mutation
 
-        # mutate each into n/4 children
+        # mutate each parent into n/4 children
         newChildrenWeights = []
-        for currWeights in self.parents:
+        for currWeights in self.parentWeights:
             newChildrenWeights.append(currWeights)
             for i in range(int(len(self.childrenWeights) / 4) - 1):
                 newWeights = currWeights + np.random.normal(0, self.mutationRate, 7)
@@ -269,6 +299,19 @@ class GeneticAlgorithm():
 
         self.childrenWeights = newChildrenWeights
 
+    def mutateNN(self):
+        newChildrenWeights = []
+        for parent in self.parentWeights:
+            newChildrenWeights.append(parent)
+            for i in range(int(len(self.childrenWeights) / 2) - 1):
+                newWeights = []
+                for param in parent:
+                    mutation =  np.random.normal(0, 0.2, param.shape)
+                    newWeights.append(np.clip(param + mutation, -1, 1))
+                newChildrenWeights.append(newWeights)
+
+        self.childrenWeights = newChildrenWeights
+
     def play(self):
         self.generations += 1
         fitnessWeights = []
@@ -277,42 +320,92 @@ class GeneticAlgorithm():
 
         # take top 2 fitness and store their weight
         sortedWeights = sorted(fitnessWeights[0], key=lambda x: x[0], reverse=True)
-        sortedWeights = np.array(sortedWeights)
-        self.parents = sortedWeights[:2, 1:]
-        self.scores.append(sortedWeights[0, 0])
+        self.parentWeights = []
+        self.parentWeights.append(sortedWeights[0][1])
+        self.parentWeights.append(sortedWeights[1][1])
 
-        if sortedWeights[0, 0] > self.bestScore:
-            self.bestScore = sortedWeights[0, 0]
-            self.bestWeights = sortedWeights[0, 1:]
+        self.scores.append(sortedWeights[0][0])
+
+        if sortedWeights[0][0] > self.bestScore:
+            self.bestScore = sortedWeights[0][0]
+            self.bestWeights = sortedWeights[0][1]
 
     def playHelper(self, weights):
-        # returns [fitness,]
-        board = Board()
-        board.weights = weights
+        # returns [combined fitness, and weights]
+        # runs twice to smooth
+        totalFitness = 0
+        for i in range(2):
+            board = Board()
+            board.weights = weights
 
-        while board.nextStateLookAhead():
-        # while board.nextState():
-            pass
+            while board.nextStateLookAhead():
+                pass
 
-        return np.concatenate((([board.fitness]), (board.weights)))
+            totalFitness += board.fitness
+
+        return [totalFitness / 2, board.weights]
+
+    def resume(self):
+
+        with open('record.npy', 'rb') as f:
+            self.scores = np.load(f).tolist()
+            prev = []
+            for i in range(4):
+                prev.append(np.load(f))
+
+        print(self.scores)
+        print(prev)
+
+        # change from list of lists, to list of np.arrays
+        temp = []
+        for i in prev:
+            temp.append(np.array(i))
+
+        newChildrenWeights = [temp]
+
+        for i in range(int(len(self.childrenWeights)) - 1):
+            newWeights = []
+            for param in temp:
+                mutation =  np.random.normal(0, 0.2, param.shape)
+                newWeights.append(np.clip(param + mutation, -1, 1))
+            newChildrenWeights.append(newWeights)
+
+        self.childrenWeights = newChildrenWeights
+
+    def output(self):
+        with open('record.npy', 'wb') as f:
+            np.save(f, self.scores)
+            for i in self.parentWeights[0]:
+                np.save(f, i)
+
 
 if __name__ == '__main__':
-    ga = GeneticAlgorithm(children=64)
+    ga = GeneticAlgorithm(children=128)
 
-    epochs = 10
+    # ga.resume()
+    try:
+        ga.resume()
+    except:
+        print("no record found")
+
+    epochs = 100
 
     start = timeit.default_timer()
 
     for i in range(epochs):
-        # if i % 10 == 0:
-        print("epoch: ", i)
         ga.play()
-        ga.mutate()
+        ga.mutateNN()
+        print("epoch: ", i)
+        if i % 10 == 0:
+            ga.output()
+        # ga.mutate()
 
     print("time: ", timeit.default_timer() - start)
-    print("best score: ", ga.bestScore)
-    print("weights: ", ga.bestWeights)
-    print("most recent weights: ", ga.parents[0])
+    # print("best score: ", ga.bestScore)
+    # print("weights: ", ga.bestWeights)
+    print("most recent weights: ", ga.parentWeights[0])
+
+    ga.output()
 
 
     plt.plot(ga.scores)
