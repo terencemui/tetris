@@ -318,7 +318,7 @@ class Bot():
         self.delay = 0.5
 
     def loadWeights(self):
-        with open("output/bestWeightsBackup.txt", 'r') as file:
+        with open("output/bestWeights.txt", 'r') as file:
             numbers = []
             for line in file:
                 strNums = line.split()
