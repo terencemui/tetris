@@ -229,7 +229,7 @@ void Tetris::clearLines()
 
     int scores[5] = {0, 1, 3, 5, 16};
 
-    igScore += (scores[count] * (1 + combo));
+    igScore += (scores[count]);
 }
 
 void Tetris::setWeights(std::vector<double> &newWeights)
@@ -359,7 +359,7 @@ double Tetris::calculateNNScore()
     for (int col = 0; col < width; ++col)
     {
         curr = state[col];
-        ones = std::popcount(state[col]);
+        ones = std::popcount(state[col]);3
         for (int row = 0; row < maxHeight; ++row)
         {
             if ((curr & 1) == 0)
